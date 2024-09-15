@@ -4,6 +4,7 @@ use syn::{
     braced,
     parse::{Parse, ParseStream, Result},
     token::Comma,
+    Token,
     Ident,
     Error
 };
@@ -18,13 +19,7 @@ use std::collections::{
     HashSet
 };
 
-use crate::fsm::variant::{
-    EventVariants,
-    EventVariant
-};
-
 use crate::fsm::transition::{
-    TDefinition,
     Transitions,
     Transition
 };
@@ -45,17 +40,13 @@ pub(crate) struct Events {
 pub(crate) struct Event {
     pub name: Ident,
     pub transitions: Transitions,
-    pub variants: EventVariants
 }
 
 impl Parse for EDefinition {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut prevs: HashSet<State> = HashSet::new();
-        let mut nexts: HashSet<State> = HashSet::new();
-        let mut inits: HashSet<State> = HashSet::new();
-
+        let mut orig_states: HashSet<State> = HashSet::new();
+        let mut dest_states: HashSet<State> = HashSet::new();
         let mut transitions: Vec<Transition> = Vec::new();
-        let mut variants: HashSet<EventVariant> = HashSet::new();
 
         let event: Ident = input.parse()?;
 
@@ -63,44 +54,34 @@ impl Parse for EDefinition {
         braced!(event_blk in input);
 
         while !event_blk.is_empty() {
-            let TDefinition {
-                origins: t_prevs, 
-                destination: t_next
-            } = event_blk.parse()?;
+            let mut def_states: Vec<Ident> = Vec::new();
 
-            if let Some(t_prevs) = t_prevs {
-
-                let t_prevs: HashSet<State> = t_prevs.into();
-
-                for i in prevs.intersection(&t_prevs) {
-                    let first = prevs.get(&i).unwrap();
-                    let current = t_prevs.get(&i).unwrap();
-
-                    let mut err = Error::new_spanned(&current.name, format!{"Duplicate transition origin: {}", current.name});
+            loop {
+                let state: State = event_blk.parse()?;
+                if let Some(first) = orig_states.get(&state) {
+                    let mut err = Error::new_spanned(&state.name, format!{"Duplicate transition origin: {}", state.name});
                     err.combine(Error::new_spanned(&first.name, format!{"First declared here"}));
 
                     return Err(err);
                 }
 
-                nexts.insert(t_next.clone());
-                prevs.extend(t_prevs.iter().cloned());
+                orig_states.insert(state.clone());
+                def_states.push(state.name);
 
-                transitions.extend(Transitions::generate(Some(t_prevs), t_next.clone(), event.clone()));
-
-            } else {
-                if let Some(first) = inits.get(&t_next) {
-                    let mut err = Error::new_spanned(&t_next.name, format!{"Duplicate sate initialisation: {}", t_next.name});
-                    err.combine(Error::new_spanned(&first.name, format!{"First declared here"}));
-
-                    return Err(err);
+                if event_blk.peek(Token![,]) {
+                    let _: Comma = event_blk.parse()?;
+                } else {
+                    break;
                 }
-
-                inits.insert(t_next.clone());
-                transitions.extend(Transitions::generate(t_prevs, t_next.clone(), event.clone()));
             }
 
-            variants.insert(EventVariant::new(t_next.name, event.clone()));
+            let _: Token![=>] = event_blk.parse()?;
 
+            let dest_state: State = event_blk.parse()?;
+            dest_states.insert(dest_state.clone());
+
+            transitions.extend(Transitions::generate(def_states, dest_state.name, event.clone()));
+            
             if event_blk.is_empty() {
                 break;
             }
@@ -108,15 +89,13 @@ impl Parse for EDefinition {
             let _: Comma = event_blk.parse()?;
         }
         
-        nexts.extend(inits);
-        prevs.extend(nexts);
+        orig_states.extend(dest_states);
 
         Ok ( EDefinition {
-            states: prevs.into(),
+            states: orig_states.into(),
             event: Event { 
                 name: event, 
                 transitions: transitions.into(),
-                variants: variants.into()
             }
         } )
     }
@@ -153,7 +132,6 @@ impl ToTokens for Event {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let name = &self.name;
         let transitions = &self.transitions;
-        let variants = &self.variants;
 
         tokens.extend(quote! {
             #[derive(Clone, Copy, PartialEq, Eq)]
@@ -161,7 +139,6 @@ impl ToTokens for Event {
             impl Event for #name {}
 
             #transitions
-            #variants
         });
     }
 }

@@ -2,4 +2,5 @@ pub mod event;
 pub mod state;
 pub mod machine;
 pub mod transition;
-pub mod variant;
+pub mod init;
+pub mod memory;

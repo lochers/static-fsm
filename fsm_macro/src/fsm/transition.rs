@@ -1,22 +1,9 @@
 
 use proc_macro2::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{
-    parse::{Parse, ParseStream, Result},
-    token::Comma,
-    Token,
-    Ident,
-    Error,
-};
+use syn::Ident;
 
 use std::slice::Iter;
-
-use std::collections::HashSet;
-
-use crate::fsm::state::{
-    States,
-    State
-};
 
 pub(crate) struct Transitions {
     transitions: Vec<Transition>
@@ -45,69 +32,10 @@ impl From<Vec<Transition>> for Transitions {
     }
 }
 
-pub(crate) struct TDefinition {
-    pub origins: Option<States>,
-    pub destination: State
-}
-
 pub(crate) struct Transition {
     pub event: Ident,
     pub next: Ident,
-    pub prev: Option<Ident>
-}
-
-impl Parse for TDefinition {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        if input.peek(Token![=>]) {
-            let _: Token![=>] = input.parse()?;
-
-            let next: State = input.parse()?;
-
-            Ok( TDefinition {
-                origins: None,
-                destination: next
-            })
-        } else {
-            let mut prevs: HashSet<State> = HashSet::new(); 
-
-            prevs.insert(input.parse()?);
-
-            loop {
-                if input.peek(Token![,]) {
-                    let _: Comma = input.parse()?;
-                    
-                    let state: State = State::parse(&input)?;
-
-                    if let Some(first) = prevs.get(&state) {
-                        let mut err = Error::new_spanned(&state.name, format!{"Duplicate transition origin: {}", state.name});
-                        err.combine(Error::new_spanned(&first.name, format!{"First declared here"}));
-
-                        return Err(err);
-                    }
-
-                    prevs.insert(state);
-                } else {
-                    break;
-                }
-            }
-
-            let _: Token![=>] = input.parse()?;
-
-            let next: State = input.parse()?;
-
-            if let Some(first) = prevs.get(&next) {
-                let mut err = Error::new_spanned(&next.name, format!{"Destination state can not be an origin to itself: {}", next.name});
-                err.combine(Error::new_spanned(&first.name, format!{"First declared here"}));
-
-                return Err(err);
-            }
-
-            Ok( TDefinition {
-                origins: Some( prevs.into() ),
-                destination: next
-            })
-        }
-    }
+    pub prev: Ident
 }
 
 impl Transitions {
@@ -116,29 +44,19 @@ impl Transitions {
         self.transitions.iter()
     }
 
-    pub fn generate<I>(prevs: Option<I>, next: State, event: Ident) -> Self
+    pub fn generate<I>(prevs: I, next: Ident, event: Ident) -> Self
     where
-        I: IntoIterator<Item = State>
+        I: IntoIterator<Item = Ident>
     {
-        if let Some(prevs) = prevs {
-            Self {
-                transitions: prevs.into_iter()
-                    .map(|prev| 
-                         Transition {
-                             event: event.clone(), 
-                             next: next.name.clone(), 
-                             prev: Some( prev.name )
-                         }).collect()
-            }
-        } else {
-            Self {
-                transitions: vec![Transition {
-                    event,
-                    next: next.name,
-                    prev: None
-                }]
-            }
 
+        Self {
+            transitions: prevs.into_iter()
+                .map(|prev| 
+                     Transition {
+                         event: event.clone(), 
+                         next: next.clone(), 
+                         prev
+                     }).collect()
         }
     }
 }
@@ -153,38 +71,18 @@ impl ToTokens for Transition {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let event = &self.event;
         let next = &self.next;
+        let prev = &self.prev;
         
-        if let Some(prev) = &self.prev {
-            let prev = &prev;
-            tokens.extend(quote! {
-                impl<E: Event> Transition<#event> for FSM<#prev, E> {
-                    type SM = FSM<#next, #event>;
+        tokens.extend(quote! {
+            impl Transition<#event> for FSM<#prev> {
+                type SM = FSM<#next>;
 
-                    fn t(self, event: #event) -> Self::SM {
-                        FSM {
-                            s: #next,
-                            e: event 
-                        }
+                fn t(self, _e: #event) -> Self::SM {
+                    FSM {
+                        _s: PhantomData
                     }
                 }
-            });
-        } else {
-            tokens.extend(quote! {
-                impl EntryPoint<#next> for #event {
-                    type Event = #event;
-                    type SM = FSM<#next, #event>;
-
-                    fn fsm() -> Self::SM {
-                        FSM {
-                            s: #next,
-                            e: #event
-                        }
-                    }
-                }
-            });
-
-        }
-
-
+            }
+        });
     }
 }

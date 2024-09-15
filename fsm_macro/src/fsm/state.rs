@@ -30,6 +30,14 @@ impl From<HashSet<State>> for States {
     }
 }
 
+impl From<Ident> for State {
+    fn from(ident: Ident) -> Self {
+        Self {
+            name: ident
+        }
+    }
+}
+
 impl IntoIterator for States {
     type Item = State;
     type IntoIter = std::collections::hash_set::IntoIter<State>;
@@ -83,7 +91,3 @@ impl Hash for State {
         self.name.hash(state)
     }
 }
-
-
-
-
