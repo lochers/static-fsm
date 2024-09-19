@@ -8,7 +8,10 @@ use syn::{
     Error
 };
 
-use std::collections::HashSet;
+use std::collections::{
+    HashSet,
+    HashMap
+};
 
 use crate::fsm::{
     event::{
@@ -24,13 +27,15 @@ use crate::fsm::{
         MemDefs,
         StateMems,
         StateMem
-    }
+    },
+    trace::Traces
 };
 
 pub(crate) struct Machine {
     name: Ident,
     states: StateMems,
     inits: Inits,
+    traces: Traces,
     events: Events,
     variants: MemDefs
 }
@@ -57,10 +62,15 @@ impl Parse for Machine {
             mem_defs
         } = machine_blk.parse()?;
 
+        let Traces {
+            traces: trace_states
+        } = machine_blk.parse()?;
+        let mut trace_states: HashMap<State, Vec<Ident>> = trace_states.into();
+
         let mut mem_defs: Vec<MemDef> = mem_defs.into();
 
         while !machine_blk.is_empty() {
-            let EDefinition {states: event_states, event} = machine_blk.parse()?;
+            let EDefinition {origs: event_origs, dests: event_dests, event} = machine_blk.parse()?;
 
             if let Some(first) = events.get(&event) {
                 let mut err = Error::new_spanned(&event.name, format!{"Duplicate event: {}", event.name});
@@ -68,8 +78,13 @@ impl Parse for Machine {
                 return Err(err);
             }
 
+            for (_, events) in trace_states.iter_mut().filter(|(key, _)| event_origs.contains(key)) {
+                events.push(event.name.clone());
+            }
+
             events.insert(event);
-            states.extend(event_states);
+            states.extend(event_origs);
+            states.extend(event_dests);
         }
 
         mem_defs.extend(states.difference(&mem_states.into()).cloned().map(|s| s.into()));
@@ -80,6 +95,7 @@ impl Parse for Machine {
             Machine {
                 name,
                 inits,
+                traces: trace_states.into(),
                 states: state_mems.into(), 
                 events: events.into(),
                 variants: mem_defs.into()
@@ -92,15 +108,18 @@ impl ToTokens for Machine {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let name = &self.name;
         let inits = &self.inits;
+        let traces = &self.traces;
         let states = &self.states;
         let events = &self.events;
         let variants = &self.variants;
 
         tokens.extend(quote! {
-            use fsm::{Transition, Init, ToEnum, ToMemEnum};
+            #[allow(non_snake_case)]
             mod #name {
+                pub use static_fsm::{Transition, Init, ToEnum, ToMemEnum};
+
                 use core::marker::PhantomData;
-                use fsm::{Event, State, SM, Transition, EntryPoint, Init, ToEnum, ToMemEnum};
+                use static_fsm::{Event, State, SM, EntryPoint};
 
                 #[derive(Clone)]
                 pub struct FSM<S: State> {
@@ -109,14 +128,6 @@ impl ToTokens for Machine {
 
                 impl<S: State> SM for FSM<S> {
                     type State = S;
-                }
-
-                impl<S: State + EntryPoint> FSM<S> {
-                    fn init() -> FSM<S> {
-                        FSM {
-                            _s: PhantomData
-                        }
-                    }
                 }
 
                 impl<S: State + EntryPoint> Init<S> for FSM<S> {
@@ -132,6 +143,7 @@ impl ToTokens for Machine {
                 #states
                 #inits
                 #events
+                #traces
                 pub enum Variants {
                     #variants
                 }

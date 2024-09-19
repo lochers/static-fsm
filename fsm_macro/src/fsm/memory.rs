@@ -4,7 +4,9 @@ use syn::{
     parse::{Parse, ParseStream, Result},
     token::Comma,
     Token,
-    braced,
+    bracketed,
+    parenthesized,
+    punctuated::Punctuated,
     Ident,
     Type,
     Error,
@@ -26,7 +28,7 @@ pub(crate) struct MemDefs {
 #[derive(Clone)]
 pub(crate) struct MemDef {
     pub state: Ident,
-    pub memory: Option<Type>
+    pub memory: Option<Vec<Type>>
 }
 
 pub(crate) struct MemDefBlk {
@@ -36,7 +38,7 @@ pub(crate) struct MemDefBlk {
 
 pub(crate) struct StateMem {
     pub state: Ident,
-    pub memory: Option<Type>
+    pub memory: Option<Vec<Type>>
 }
 
 pub(crate) struct StateMems {
@@ -98,45 +100,49 @@ impl Parse for MemDefBlk {
         let mut mem_defs: Vec<MemDef> = Vec::new();
 
         let fork = input.fork();
-        let state_storage: Ident = fork.parse()?;
-        if state_storage == "Memory" {
-            let _: Ident = input.parse()?;
-            let storage_blk;
-            braced!(storage_blk in input);
+        if let Ok (memory) = fork.parse::<Ident>() {
+            if memory == "Memory" {
 
-            while !storage_blk.is_empty() {
-                let mut def_states: Vec<Ident> = Vec::new();
+                let _: Ident = input.parse()?;
+                let storage_blk;
+                bracketed!(storage_blk in input);
 
-                loop {
-                    let state: State = storage_blk.parse()?;
-                    if let Some(first) = states.get(&state) {
-                        let mut err = Error::new_spanned(&state.name, format!{"Duplicate transition origin: {}", state.name});
-                        err.combine(Error::new_spanned(&first.name, format!{"First declared here"}));
+                while !storage_blk.is_empty() {
+                    let mut def_states: Vec<Ident> = Vec::new();
 
-                        return Err(err);
+                    loop {
+                        let state: State = storage_blk.parse()?;
+                        if let Some(first) = states.get(&state) {
+                            let mut err = Error::new_spanned(&state.name, format!{"Duplicate transition origin: {}", state.name});
+                            err.combine(Error::new_spanned(&first.name, format!{"First declared here"}));
+
+                            return Err(err);
+                        }
+
+                        states.insert(state.clone());
+                        def_states.push(state.name);
+
+                        if storage_blk.peek(Token![,]) {
+                            let _: Comma = storage_blk.parse()?;
+                        } else {
+                            break;
+                        }
                     }
+                    let type_blk;
+                    parenthesized!(type_blk in storage_blk);
+                    
+                    let types: Punctuated<Type, Comma> = Punctuated::parse_terminated(&type_blk)?;
 
-                    states.insert(state.clone());
-                    def_states.push(state.name);
+                    let types: Vec<Type> = types.into_iter().collect();
 
-                    if storage_blk.peek(Token![,]) {
-                        let _: Comma = storage_blk.parse()?;
-                    } else {
+                    def_states.into_iter().for_each(|def_state| mem_defs.push(MemDef::new(def_state, Some(types.clone()))));
+                    
+                    if storage_blk.is_empty() {
                         break;
                     }
+
+                    let _: Comma = storage_blk.parse()?;
                 }
-
-                let _: Token![=>] = storage_blk.parse()?;
-
-                let memory: Type = storage_blk.parse()?;
-
-                def_states.into_iter().for_each(|def_state| mem_defs.push(MemDef::new(def_state, Some(memory.clone()))));
-                
-                if storage_blk.is_empty() {
-                    break;
-                }
-
-                let _: Comma = storage_blk.parse()?;
             }
         }
 
@@ -148,7 +154,7 @@ impl Parse for MemDefBlk {
 }
 
 impl MemDef {
-    fn new(state:Ident, memory: Option<Type>) -> Self {
+    fn new(state:Ident, memory: Option<Vec<Type>>) -> Self {
         Self {
             state,
             memory
@@ -180,17 +186,15 @@ impl ToTokens for StateMem {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let state = &self.state;
         if let Some(memory) = &self.memory {
+            let names: Vec<Ident> = (0..memory.len()).into_iter().map(|i| Ident::new(&format!("in_{i}"), proc_macro2::Span::call_site())).collect();
             tokens.extend(quote! {
                 #[derive(Clone, Copy, PartialEq, Eq)]
                 pub struct #state;
                 impl State for #state {}
 
-                impl ToMemEnum for FSM<#state> {
-                    type Repr = Variants;
-                    type Mem = #memory;
-
-                    fn to_enum(self, memory: #memory) -> Self::Repr {
-                        Variants::#state(self, memory)
+                impl FSM<#state> {
+                    pub fn to_enum(self, #(#names: #memory),*) -> Variants {
+                        Variants::#state(self, #(#names),*)
                     }
                 }
 
@@ -201,9 +205,8 @@ impl ToTokens for StateMem {
                 pub struct #state;
                 impl State for #state {}
 
-                impl ToEnum for FSM<#state> {
-                    type Repr = Variants;
-                    fn to_enum(self) -> Self::Repr {
+                impl FSM<#state> {
+                    pub fn to_enum(self) -> Variants {
                         Variants::#state(self)
                     }
                 }
@@ -224,7 +227,7 @@ impl ToTokens for MemDef {
 
         if let Some(memory) = &self.memory {
             tokens.extend(quote! {
-                #state(FSM<#state>,#memory),
+                #state(FSM<#state>,#(#memory),*),
             });
         } else {
             tokens.extend(quote! {

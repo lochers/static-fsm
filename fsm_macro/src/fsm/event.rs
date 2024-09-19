@@ -3,7 +3,10 @@ use quote::{quote, ToTokens};
 use syn::{
     braced,
     parse::{Parse, ParseStream, Result},
-    token::Comma,
+    token::{
+        Comma,
+        Colon
+    },
     Token,
     Ident,
     Error
@@ -23,13 +26,11 @@ use crate::fsm::transition::{
     Transitions,
     Transition
 };
-use crate::fsm::state::{
-    States,
-    State
-};
+use crate::fsm::state::State;
 
 pub(crate) struct EDefinition {
-    pub states: States,
+    pub origs: HashSet<State>,
+    pub dests: HashSet<State>,
     pub event: Event
 }
 
@@ -49,15 +50,13 @@ impl Parse for EDefinition {
         let mut transitions: Vec<Transition> = Vec::new();
 
         let event: Ident = input.parse()?;
-
-        let event_blk;
-        braced!(event_blk in input);
-
-        while !event_blk.is_empty() {
+        
+        if input.peek(Token![:]) {
+            let _: Colon = input.parse()?;
             let mut def_states: Vec<Ident> = Vec::new();
 
             loop {
-                let state: State = event_blk.parse()?;
+                let state: State = input.parse()?;
                 if let Some(first) = orig_states.get(&state) {
                     let mut err = Error::new_spanned(&state.name, format!{"Duplicate transition origin: {}", state.name});
                     err.combine(Error::new_spanned(&first.name, format!{"First declared here"}));
@@ -68,31 +67,68 @@ impl Parse for EDefinition {
                 orig_states.insert(state.clone());
                 def_states.push(state.name);
 
-                if event_blk.peek(Token![,]) {
-                    let _: Comma = event_blk.parse()?;
+                if input.peek(Token![,]) {
+                    let _: Comma = input.parse()?;
                 } else {
                     break;
                 }
             }
 
-            let _: Token![=>] = event_blk.parse()?;
+            let _: Token![=>] = input.parse()?;
 
-            let dest_state: State = event_blk.parse()?;
+            let dest_state: State = input.parse()?;
             dest_states.insert(dest_state.clone());
 
             transitions.extend(Transitions::generate(def_states, dest_state.name, event.clone()));
+            println!("{:?}",transitions.len());
+
             
-            if event_blk.is_empty() {
-                break;
+        } else {
+
+            let event_blk;
+            braced!(event_blk in input);
+
+            while !event_blk.is_empty() {
+                let mut def_states: Vec<Ident> = Vec::new();
+
+                loop {
+                    let state: State = event_blk.parse()?;
+                    if let Some(first) = orig_states.get(&state) {
+                        let mut err = Error::new_spanned(&state.name, format!{"Duplicate transition origin: {}", state.name});
+                        err.combine(Error::new_spanned(&first.name, format!{"First declared here"}));
+
+                        return Err(err);
+                    }
+
+                    orig_states.insert(state.clone());
+                    def_states.push(state.name);
+
+                    if event_blk.peek(Token![,]) {
+                        let _: Comma = event_blk.parse()?;
+                    } else {
+                        break;
+                    }
+                }
+
+                let _: Token![=>] = event_blk.parse()?;
+
+                let dest_state: State = event_blk.parse()?;
+                dest_states.insert(dest_state.clone());
+
+                transitions.extend(Transitions::generate(def_states, dest_state.name, event.clone()));
+                
+                if event_blk.is_empty() {
+                    break;
+                }
+
+                let _: Comma = event_blk.parse()?;
             }
 
-            let _: Comma = event_blk.parse()?;
         }
-        
-        orig_states.extend(dest_states);
 
         Ok ( EDefinition {
-            states: orig_states.into(),
+            origs: orig_states,
+            dests: dest_states,
             event: Event { 
                 name: event, 
                 transitions: transitions.into(),

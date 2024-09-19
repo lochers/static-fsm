@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 
 use quote::{quote, ToTokens};
 use syn::{
-    braced,
+    bracketed,
     parse::{Parse, ParseStream, Result},
     token::Comma,
     Ident,
@@ -71,7 +71,7 @@ impl Parse for Inits {
         }
 
         let init_blk;
-        braced!(init_blk in input);
+        bracketed!(init_blk in input);
 
         while !init_blk.is_empty() {
             let init_state: Init = init_blk.parse()?;

@@ -18,6 +18,7 @@ pub fn fsm(input: TokenStream) -> TokenStream {
     let fsm: Machine = parse_macro_input!(input as Machine);
     
     let expanded = quote!(#fsm);
+    println!("{}", expanded);
 
     expanded.into()
 }
